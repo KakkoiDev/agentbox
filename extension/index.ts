@@ -29,8 +29,8 @@ import path from "node:path";
 const LABEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 /** Cap per-job output included in the wake message. */
-const MAX_STDOUT_CHARS = 6000;
-const MAX_STDERR_CHARS = 2000;
+const MAX_STDOUT_CHARS = 50000;
+const MAX_STDERR_CHARS = 4000;
 /** Cap jobs batched into a single wake message. */
 const MAX_JOBS_PER_MESSAGE = 10;
 
@@ -239,13 +239,15 @@ async function sweep(pi: ExtensionAPI): Promise<void> {
     // sees the result on its next turn.
     pi.sendUserMessage(formatMessage(jobs, dir, omitted), { deliverAs: "followUp" });
 
-    // Cleanup. If unlinking fails the `.delivered` marker remains, which
-    // prevents double delivery.
+    // Cleanup markers and metadata — keep .out/.err so the agent can read
+    // full output beyond what the truncated wake message includes.
     for (const job of jobs) {
       const f = filesFor(job.label);
-      for (const key of Object.keys(f)) {
+      const keep = new Set(["out", "err"]);
+      for (const [key, filename] of Object.entries(f)) {
+        if (keep.has(key)) continue;
         try {
-          await fsp.rm(path.join(dir, f[key as keyof typeof f]), { force: true });
+          await fsp.rm(path.join(dir, filename), { force: true });
         } catch {
           /* best effort */
         }
