@@ -1,0 +1,46 @@
+{
+  "name": "@kakkoidv/pi-async-rewake",
+  "version": "0.1.0",
+  "description": "Pi extension for async background job rewake — like Claude Code's asyncRewake: true, for Pi. Background jobs (e.g. lavish polling) complete detached and wake the Pi agent with their output.",
+  "type": "module",
+  "bin": {
+    "pi-async-rewake": "bin/pi-async-rewake"
+  },
+  "pi": {
+    "extensions": [
+      "./extension"
+    ]
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "async",
+    "background",
+    "rewake",
+    "lavish"
+  ],
+  "license": "MIT",
+  "files": [
+    "bin",
+    "lib",
+    "extension",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0"
+  }
+}
