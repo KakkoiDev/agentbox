@@ -1,0 +1,25 @@
+{
+  "name": "@kakkoidev/pi-core",
+  "version": "0.1.0",
+  "description": "Pi extensions and tools: keep local models on track (local-model-guard) and wake the agent when background jobs finish (async-rewake).",
+  "type": "module",
+  "license": "MIT",
+  "keywords": ["pi-package", "pi-extension", "local-models", "ollama", "gemma", "qwen"],
+  "pi": {
+    "extensions": ["./local-model-guard/index.ts", "./async-rewake/extension"]
+  },
+  "bin": {
+    "pi-async-rewake": "async-rewake/bin/pi-async-rewake"
+  },
+  "files": ["local-model-guard", "async-rewake/bin", "async-rewake/lib", "async-rewake/extension", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "test": "node --test 'local-model-guard/test/*.test.mjs' 'async-rewake/test/*.test.js'"
+  },
+  "dependencies": {
+    "@kakkoidev/ai-core": "file:../ai-core"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
