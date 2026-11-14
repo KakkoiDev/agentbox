@@ -20,6 +20,19 @@ code. Instead, it:
 
 Every action is recorded as a `local-model-guard` session entry. Type `/guard` to see the counts for the session.
 
+## Measured effect
+
+Agentic bench (5 small Python repositories, graded by hidden tests), pi with thinking off,
+Ollama on an Apple M6 with 32 GB, 2026-11-14. Single runs per task, so one task either way is noise.
+
+| Model | Without the guard | With the guard |
+|---|---|---|
+| gemma4:26b-mlx | 1/5 and 0/5 solved, 25–35 min, one 15–25 min hang per run | 3/5 solved, 12/14 hidden tests, 4.6 min, no hang |
+| qwen3.8:27b-mlx | 4/5 and 4/5 solved, 6–7 min | 4/5 solved, 4.6 min (the guard took no action) |
+
+For Gemma, nearly all the gain came from the request fix (`reasoning_effort: "none"`); the
+guard also sent one nudge and needed no tool-call repair in that run.
+
 ## Settings
 
 Environment variables:
