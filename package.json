@@ -17,7 +17,7 @@
     "test": "node --test 'local-model-guard/test/*.test.mjs' 'async-rewake/test/*.test.js'"
   },
   "dependencies": {
-    "@kakkoidev/ai-core": "file:../ai-core"
+    "@kakkoidev/ai-core": "https://codeload.github.com/KakkoiDev/ai-core/tar.gz/01afa5e8ec6dd5011148f3797ceabe50e6eebdc8"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"
