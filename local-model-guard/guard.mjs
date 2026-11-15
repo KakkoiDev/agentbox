@@ -18,8 +18,8 @@
 //    in this request, so no write is replayed (pi-local-harness task 370).
 // 8. Early compaction (agent_end): after a turn that passes a share of the context window, the
 //    session is compacted once, keeping the open work (pi-local-harness task 116).
-// 9. Model profiles, switched on by model id (see PROFILES). gpt-oss: a reasoning effort when pi's
-//    thinking is off (pi sends none, so Ollama uses medium), the working folder's files in the system
+// 9. Model profiles, switched on by model id (see PROFILES). gpt-oss: an opt-in reasoning effort when pi's
+//    thinking is off (PI_GUARD_GPT_OSS_EFFORT; pi sends none, so Ollama uses medium), the working folder's files in the system
 //    prompt (it opened every agentic-v1 task by reading "" as a file), and a hint when read is given
 //    a folder.
 import { appendFileSync, readdirSync } from "node:fs";
@@ -41,7 +41,9 @@ export const PROFILES = [
     id: "gpt-oss",
     match: model => /^gpt-oss(?::|-|$)/i.test(model ?? ""),
     why: "gpt-oss on Ollama (agentic-v1, 2026-11-14): thinks at Ollama's default medium effort when pi's thinking is off; first call of every task was read on a folder; about twice qwen's tool calls.",
-    effort: "low",
+    // No effort by default: "low" made agentic-v1 2.4x faster with the same solved count, but lost on the held-out
+    // agentic-v2 (9/10 -> 5/10 solved) and coding-v2 (12/12 at medium -> 8/12). Set PI_GUARD_GPT_OSS_EFFORT to opt in.
+    effort: null,
     listFiles: true,
     folderHint: true,
   },
@@ -124,7 +126,7 @@ export function installLocalModelGuard(pi, opts = options(), { now = () => Date.
     const thinking = ctx?.thinkingLevel ?? pi.getThinkingLevel?.();
     const fix = requestAdjustments({ provider: ctx?.model?.provider, model: ctx?.model?.id, thinking }) || { patch: {}, rules: [] };
     const profile = profileFor(ctx?.model?.id, opts);
-    const effort = profile?.effort && (opts.gptOssEffort || profile.effort);
+    const effort = profile && (opts.gptOssEffort || profile.effort);
     if (effort && effort !== "default" && (thinking === "off" || thinking === false) && event.payload.reasoning_effort === undefined
         && fix.patch.reasoning_effort === undefined) {
       fix.patch = { ...fix.patch, reasoning_effort: effort };

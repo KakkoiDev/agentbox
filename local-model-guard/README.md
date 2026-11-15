@@ -29,7 +29,7 @@ Some settings are switched on by model id (`PROFILES` in `guard.mjs`). Today one
 
 | What gpt-oss did | What the profile does |
 |---|---|
-| With pi's thinking off, pi sends no reasoning effort and Ollama thinks at medium | Sends `reasoning_effort` (default `low`, `PI_GUARD_GPT_OSS_EFFORT`); a level you set in pi is kept |
+| With pi's thinking off, pi sends no reasoning effort and Ollama thinks at medium | Nothing by default. `PI_GUARD_GPT_OSS_EFFORT=low` sends `reasoning_effort: low`: 2.4x faster on agentic-v1 with the same solved count, but worse on held-out benches (agentic-v2 9/10 → 5/10, coding-v2 12/12 → 8/12), so it is opt-in. A level you set in pi is kept |
 | Opened every task by calling read on `""` (a folder) | Adds the working folder's files (up to 60 lines, hidden and build folders skipped) to the system prompt, with "read takes a file path, not a folder" |
 | Retried read on folders | A read on a folder gets "List it with bash (ls)" |
 
@@ -64,7 +64,7 @@ Environment variables:
 | `PI_GUARD_TOOL_JSON_RETRY` | on | `off` does not retry a tool call the server could not parse |
 | `PI_GUARD_COMPACT_AT` | `0.6` | Compact after a turn that passes this share of the context window (`0` turns it off) |
 | `PI_GUARD_PROFILE` | on | `off` turns model profiles off |
-| `PI_GUARD_GPT_OSS_EFFORT` | `low` | gpt-oss reasoning effort when pi's thinking is off: `low`, `medium`, `high`, or `default` to send none |
+| `PI_GUARD_GPT_OSS_EFFORT` | (none) | gpt-oss reasoning effort when pi's thinking is off: `low`, `medium`, `high`; unset or `default` sends none |
 | `PI_GUARD_LIST_FILES` | auto | `on` lists the working folder for every model, `off` for none, `auto` lets the profile decide |
 
 ## How it works

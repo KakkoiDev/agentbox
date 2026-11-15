@@ -43,7 +43,7 @@ test("the system prompt gets the coding rules, the terse style and only the guid
 
 test("guides are chosen by trigger words, most matched first", () => {
   const guides = loadGuides();
-  assert.deepEqual(guides.map(g => g.name), ["bug", "doubt", "rename", "spec", "speed"]);
+  assert.deepEqual(guides.map(g => g.name), ["bug", "doubt", "rename", "speed"]);
   assert.deepEqual(chooseGuides("Rename foo everywhere, it's broken", guides).map(g => g.name), ["rename", "bug"]);
   assert.deepEqual(chooseGuides("make a todo app", guides), []);
 });

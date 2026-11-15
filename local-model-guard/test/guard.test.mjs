@@ -176,14 +176,15 @@ test("a turn past the compaction share compacts once with the open work kept", a
 
 const gpt = { ...ctx, model: { provider: "ollama", id: "gpt-oss:20b" } };
 
-test("gpt-oss with thinking off gets reasoning_effort low (or the PI_GUARD_GPT_OSS_EFFORT setting); a set effort is kept", async () => {
+test("gpt-oss: no reasoning_effort by default; PI_GUARD_GPT_OSS_EFFORT opts in when thinking is off; a set effort is kept", async () => {
   const run = async (o, payload, c = gpt) => { const { pi, emit } = fakePi(); installLocalModelGuard(pi, o); return emit("before_provider_request", { payload }, c); };
-  assert.deepEqual(await run(opts, { model: "gpt-oss:20b" }), { model: "gpt-oss:20b", reasoning_effort: "low" });
-  assert.deepEqual(await run({ ...opts, gptOssEffort: "medium" }, { model: "gpt-oss:20b" }), { model: "gpt-oss:20b", reasoning_effort: "medium" });
+  assert.equal(await run(opts, { model: "gpt-oss:20b" }), undefined);
+  assert.deepEqual(await run({ ...opts, gptOssEffort: "low" }, { model: "gpt-oss:20b" }), { model: "gpt-oss:20b", reasoning_effort: "low" });
   assert.equal(await run({ ...opts, gptOssEffort: "default" }, { model: "gpt-oss:20b" }), undefined);
-  assert.equal(await run(opts, { model: "gpt-oss:20b", reasoning_effort: "high" }), undefined, "pi already chose an effort");
-  assert.equal(await run(opts, { model: "gpt-oss:20b" }, { ...gpt, thinkingLevel: "medium" }), undefined, "thinking on: pi decides");
-  assert.equal(await run(options({ PI_GUARD_PROFILE: "off" }), { model: "gpt-oss:20b" }), undefined);
+  assert.equal(await run({ ...opts, gptOssEffort: "low" }, { model: "gpt-oss:20b", reasoning_effort: "high" }), undefined, "pi already chose an effort");
+  assert.equal(await run({ ...opts, gptOssEffort: "low" }, { model: "gpt-oss:20b" }, { ...gpt, thinkingLevel: "medium" }), undefined, "thinking on: pi decides");
+  assert.equal(await run({ ...options({ PI_GUARD_PROFILE: "off" }), gptOssEffort: "low" }, { model: "gpt-oss:20b" }), undefined);
+  assert.equal(await run({ ...opts, gptOssEffort: "low" }, { model: "q" }, { ...ctx, model: { provider: "ollama", id: "qwen3.8:27b-mlx" } }), undefined, "other models untouched");
   assert.equal(options({ PI_GUARD_GPT_OSS_EFFORT: "high" }).gptOssEffort, "high");
 });
 
