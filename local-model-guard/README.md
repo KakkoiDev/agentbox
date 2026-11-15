@@ -22,6 +22,17 @@ code. Instead, it:
 | The server could not parse the model's tool call ("error parsing tool call: unexpected end of JSON input") | Asks once for a short valid tool call, unless a tool already changed something in this request, so no write is replayed. From pi-local-harness (task 370). |
 | A long session nearing the context limit | After a turn that passes 60% of the context window, compacts once, keeping the open work (request, decisions, files touched, what is left). From pi-local-harness (task 116). |
 
+### Model profiles
+
+Some settings are switched on by model id (`PROFILES` in `guard.mjs`). Today one profile, **gpt-oss**
+(`gpt-oss:20b`, `gpt-oss-120b`, …), from its agentic-v1 transcripts:
+
+| What gpt-oss did | What the profile does |
+|---|---|
+| With pi's thinking off, pi sends no reasoning effort and Ollama thinks at medium | Sends `reasoning_effort` (default `low`, `PI_GUARD_GPT_OSS_EFFORT`); a level you set in pi is kept |
+| Opened every task by calling read on `""` (a folder) | Adds the working folder's files (up to 60 lines, hidden and build folders skipped) to the system prompt, with "read takes a file path, not a folder" |
+| Retried read on folders | A read on a folder gets "List it with bash (ls)" |
+
 Every action is recorded as a `local-model-guard` session entry. Type `/guard` to see the counts for the session.
 
 ## Measured effect
@@ -52,6 +63,9 @@ Environment variables:
 | `PI_GUARD_STRIP_TOKENS` | on | `off` keeps leaked template tokens |
 | `PI_GUARD_TOOL_JSON_RETRY` | on | `off` does not retry a tool call the server could not parse |
 | `PI_GUARD_COMPACT_AT` | `0.6` | Compact after a turn that passes this share of the context window (`0` turns it off) |
+| `PI_GUARD_PROFILE` | on | `off` turns model profiles off |
+| `PI_GUARD_GPT_OSS_EFFORT` | `low` | gpt-oss reasoning effort when pi's thinking is off: `low`, `medium`, `high`, or `default` to send none |
+| `PI_GUARD_LIST_FILES` | auto | `on` lists the working folder for every model, `off` for none, `auto` lets the profile decide |
 
 ## How it works
 
