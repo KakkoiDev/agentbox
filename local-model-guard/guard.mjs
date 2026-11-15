@@ -18,7 +18,12 @@
 //    in this request, so no write is replayed (pi-local-harness task 370).
 // 8. Early compaction (agent_end): after a turn that passes a share of the context window, the
 //    session is compacted once, keeping the open work (pi-local-harness task 116).
-import { appendFileSync } from "node:fs";
+// 9. Model profiles, switched on by model id (see PROFILES). gpt-oss: a reasoning effort when pi's
+//    thinking is off (pi sends none, so Ollama uses medium), the working folder's files in the system
+//    prompt (it opened every agentic-v1 task by reading "" as a file), and a hint when read is given
+//    a folder.
+import { appendFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { classifyTurn, turnRecovery, parseTextToolCalls, createStallWatch, createReasoningWatch, requestAdjustments } from "@kakkoidev/ai-core";
 
 const STALL_NUDGE = "Your last response stopped producing output and was cancelled. Continue the task: call a tool to make progress, or reply with your final answer.";
@@ -29,6 +34,39 @@ const TEMPLATE_TOKENS = /<channel\|>|<\|[^<>\n]*\|>/g;
 const BROKEN_TOOL_JSON = /error parsing tool call:[\s\S]*(?:unexpected end of JSON input|invalid character\b|invalid escape\b|invalid unicode\b)/i;
 const READS = new Set(["read", "grep", "find", "ls"]);
 const ENTRY = "local-model-guard";
+
+/** Settings switched on by model id. `effort`: reasoning_effort sent when pi's thinking is off and the request has none. */
+export const PROFILES = [
+  {
+    id: "gpt-oss",
+    match: model => /^gpt-oss(?::|-|$)/i.test(model ?? ""),
+    why: "gpt-oss on Ollama (agentic-v1, 2026-11-14): thinks at Ollama's default medium effort when pi's thinking is off; first call of every task was read on a folder; about twice qwen's tool calls.",
+    effort: "low",
+    listFiles: true,
+    folderHint: true,
+  },
+];
+export const profileFor = (model, opts = {}) => opts.profiles === false ? null : PROFILES.find(p => p.match(model)) || null;
+
+const SKIP = new Set([".git", "node_modules", "__pycache__", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".idea", ".vscode", "dist", "build"]);
+/** The folder's files as an indented list (hidden and build folders skipped), at most `max` lines. */
+export function listFolder(dir, { max = 60, depth = 3 } = {}) {
+  const lines = [];
+  let more = 0;
+  const walk = (path, level) => {
+    let entries;
+    try { entries = readdirSync(path, { withFileTypes: true }); } catch { return; }
+    entries = entries.filter(e => !e.name.startsWith(".") && !SKIP.has(e.name)).sort((a, b) => a.name.localeCompare(b.name));
+    for (const e of entries) {
+      if (lines.length >= max) { more++; continue; }
+      lines.push("  ".repeat(level) + e.name + (e.isDirectory() ? "/" : ""));
+      if (e.isDirectory() && level + 1 < depth) walk(join(path, e.name), level + 1);
+    }
+  };
+  walk(dir, 0);
+  return lines.length ? lines.join("\n") + (more ? `\n… and ${more} more` : "") : "";
+}
+export const folderSection = listing => `## Working folder\n\nFiles at the start of this request:\n${listing}\n\nread takes a file path, not a folder; use bash (ls, find, grep) to look further.`;
 
 export function options(env = process.env) {
   const num = (name, fallback) => {
@@ -45,6 +83,11 @@ export function options(env = process.env) {
     stripTokens: env.PI_GUARD_STRIP_TOKENS !== "off",
     toolJsonRetry: env.PI_GUARD_TOOL_JSON_RETRY !== "off",
     compactAt: Math.min(num("PI_GUARD_COMPACT_AT", 0.6), 1),
+    profiles: env.PI_GUARD_PROFILE !== "off",
+    // reasoning_effort for gpt-oss when pi's thinking is off: low, medium, high, or "default" to send none
+    gptOssEffort: env.PI_GUARD_GPT_OSS_EFFORT || "",
+    // the working folder's files in the system prompt: "auto" (the model's profile decides), "on" or "off"
+    listFiles: ["on", "off"].includes(env.PI_GUARD_LIST_FILES) ? env.PI_GUARD_LIST_FILES : "auto",
   };
 }
 
@@ -53,7 +96,7 @@ const thinkingOf = message => (message.content || []).filter(c => c?.type === "t
 const callsOf = message => (message.content || []).filter(c => c?.type === "toolCall");
 
 export function installLocalModelGuard(pi, opts = options(), { now = () => Date.now(), timers = globalThis } = {}) {
-  const stats = { adjusted: 0, repaired: 0, nudged: 0, stalls: 0, loops: 0, stripped: 0, compacted: 0, stopped: 0 };
+  const stats = { adjusted: 0, repaired: 0, nudged: 0, stalls: 0, loops: 0, stripped: 0, compacted: 0, stopped: 0, listed: 0, hinted: 0 };
   let nudges = 0, lastKind = null, resending = false, stalled = null, watch = null, timer = null, seq = 0;
   let thoughts = createReasoningWatch(), brokenJson = false, mutated = false, compacted = false;
 
@@ -79,11 +122,38 @@ export function installLocalModelGuard(pi, opts = options(), { now = () => Date.
   pi.on("before_provider_request", (event, ctx) => {
     if (!event?.payload || typeof event.payload !== "object" || Array.isArray(event.payload)) return undefined;
     const thinking = ctx?.thinkingLevel ?? pi.getThinkingLevel?.();
-    const fix = requestAdjustments({ provider: ctx?.model?.provider, model: ctx?.model?.id, thinking });
-    if (!fix) return undefined;
+    const fix = requestAdjustments({ provider: ctx?.model?.provider, model: ctx?.model?.id, thinking }) || { patch: {}, rules: [] };
+    const profile = profileFor(ctx?.model?.id, opts);
+    const effort = profile?.effort && (opts.gptOssEffort || profile.effort);
+    if (effort && effort !== "default" && (thinking === "off" || thinking === false) && event.payload.reasoning_effort === undefined
+        && fix.patch.reasoning_effort === undefined) {
+      fix.patch = { ...fix.patch, reasoning_effort: effort };
+      fix.rules = [...fix.rules, `${profile.id}-effort-${effort}`];
+    }
+    if (!fix.rules.length) return undefined;
     stats.adjusted++;
     record("adjusted", ctx, { rules: fix.rules });
     return { ...event.payload, ...fix.patch };
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    const profile = profileFor(ctx?.model?.id, opts);
+    if (opts.listFiles === "off" || (opts.listFiles === "auto" && !profile?.listFiles) || typeof event?.systemPrompt !== "string") return undefined;
+    const listing = listFolder(ctx?.cwd || process.cwd());
+    if (!listing) return undefined;
+    stats.listed++;
+    record("listed", ctx, { lines: listing.split("\n").length });
+    return { systemPrompt: `${event.systemPrompt}\n\n${folderSection(listing)}` };
+  });
+
+  pi.on("tool_result", (event, ctx) => {
+    if (!profileFor(ctx?.model?.id, opts)?.folderHint || event?.toolName !== "read" || !event.isError) return undefined;
+    const text = (event.content || []).filter(c => c?.type === "text").map(c => c.text || "").join("\n");
+    if (!/EISDIR|is a directory/i.test(text)) return undefined;
+    const path = String(event.input?.path ?? "") || ".";
+    stats.hinted++;
+    record("hinted", ctx, { reason: "read on a folder", path });
+    return { content: [...(event.content || []), { type: "text", text: `\n[local-model-guard] ${path} is a folder. List it with bash (ls ${path === "." ? "" : path}), then read a file in it.`.replace("(ls )", "(ls)") }] };
   });
 
   pi.on("message_start", (event, ctx) => {

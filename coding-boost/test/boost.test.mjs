@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installCodingBoost, options, isTestRun, chooseGuides, loadGuides, closestText, stuckPattern } from "../boost.mjs";
+import { installCodingBoost, options, isTestRun, chooseGuides, loadGuides, closestText, stuckPattern, isSpeedRequest, profileFor, PERF_PROMPT } from "../boost.mjs";
 
 function fakePi() {
   const handlers = {}, entries = [];
@@ -43,7 +43,7 @@ test("the system prompt gets the coding rules, the terse style and only the guid
 
 test("guides are chosen by trigger words, most matched first", () => {
   const guides = loadGuides();
-  assert.deepEqual(guides.map(g => g.name), ["bug", "doubt", "rename"]);
+  assert.deepEqual(guides.map(g => g.name), ["bug", "doubt", "rename", "spec", "speed"]);
   assert.deepEqual(chooseGuides("Rename foo everywhere, it's broken", guides).map(g => g.name), ["rename", "bug"]);
   assert.deepEqual(chooseGuides("make a todo app", guides), []);
 });
@@ -154,3 +154,73 @@ test("PI_CODING=off disables everything", async () => {
   installCodingBoost(pi, options({ PI_CODING: "off" }));
   assert.equal(await start(emit), undefined);
 });
+
+// --- gpt-oss profile and the speed check ---------------------------------------------------------------------------
+
+const gptCtx = { ...ctx, model: { provider: "ollama", id: "gpt-oss:20b" } };
+
+test("profiles are chosen by model id and can be switched off", () => {
+  assert.equal(profileFor("gpt-oss:20b").id, "gpt-oss");
+  assert.equal(profileFor("gpt-oss-120b").id, "gpt-oss");
+  assert.equal(profileFor("qwen3.8:27b-mlx"), null);
+  assert.equal(profileFor("gpt-oss:20b", options({ PI_CODING_PROFILE: "off" })), null);
+});
+
+test("speed requests are recognised by their words", () => {
+  assert.equal(isSpeedRequest("top_words is far too slow on large inputs"), true);
+  assert.equal(isSpeedRequest("Make it fast enough that the tests pass"), true);
+  assert.equal(isSpeedRequest("add a dark mode"), false);
+  assert.equal(chooseGuides("this is too slow, make it faster", loadGuides())[0].name, "speed");
+});
+
+async function speedRun(context, o = opts) {
+  const { pi, emit } = fakePi();
+  installCodingBoost(pi, o);
+  await emit("before_agent_start", { prompt: "parse() is too slow on large files; make it faster", systemPrompt: "BASE" }, context);
+  await emit("tool_result", { toolName: "write", input: { path: "app.py", content: "x" }, content: ok("Wrote"), isError: false }, context);
+  await emit("tool_result", { toolName: "bash", input: { command: "python3 -m unittest" }, content: ok("OK"), isError: false }, context);
+  await emit("message_end", { message: { role: "assistant", content: ok("Done.") } }, context);
+  const settleWith = () => emit("agent_before_settle", { outcome: "completed", continue: false, entries: [] }, context);
+  return [await settleWith(), await settleWith()];
+}
+
+test("gpt-oss: a verified speed change is woken once to cost and time the code", async () => {
+  const [first, second] = await speedRun(gptCtx);
+  assert.equal(first.continue, true);
+  assert.equal(first.entries.at(-1).content, PERF_PROMPT);
+  assert.equal(second, undefined, "only once per request");
+});
+
+test("the speed check is off for models without the profile unless PI_CODING_PERF_CHECK=on", async () => {
+  assert.deepEqual(await speedRun(ctx), [undefined, undefined]);
+  assert.equal((await speedRun(ctx, options({ PI_CODING_PERF_CHECK: "on" })))[0].continue, true);
+  assert.deepEqual(await speedRun(gptCtx, options({ PI_CODING_PERF_CHECK: "off" })), [undefined, undefined]);
+});
+
+test("gpt-oss: an unchanged re-read is noted, a changed file is not", async () => {
+  const { pi, emit } = fakePi();
+  installCodingBoost(pi, opts);
+  await emit("before_agent_start", { prompt: "fix it", systemPrompt: "BASE" }, gptCtx);
+  const read = text => emit("tool_result", { toolName: "read", input: { path: "a.py" }, content: ok(text), isError: false }, gptCtx);
+  assert.equal(await read("v1"), undefined);
+  assert.match(textOfResult(await read("v1")), /has not changed since your last read/);
+  assert.equal(await read("v2"), undefined);
+  // other models: no note
+  const other = fakePi(); installCodingBoost(other.pi, opts);
+  const r = () => other.emit("tool_result", { toolName: "read", input: { path: "a.py" }, content: ok("v1"), isError: false }, ctx);
+  await r(); assert.equal(await r(), undefined);
+});
+
+test("gpt-oss: the closest current text comes with the first failed edit", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "coding-boost-gpt-"));
+  writeFileSync(join(dir, "m.py"), "def f(x):\n    return x + 1\n");
+  const c = { ...gptCtx, cwd: dir };
+  const fail = (o, context) => { const { pi, emit } = fakePi(); installCodingBoost(pi, o);
+    return emit("tool_result", { toolName: "edit", input: { path: "m.py", edits: [{ oldText: "def f(x):\n    return x+1", newText: "y" }] },
+      content: ok("Could not find the exact text in m.py"), isError: true }, context); };
+  assert.match(textOfResult(await fail(opts, c)), /Closest current text/);
+  assert.equal(await fail(opts, { ...c, model: ctx.model }), undefined, "other models wait for the second failure");
+  assert.equal(await fail(options({ PI_CODING_EDIT_HINT_AFTER: "2" }), c), undefined, "an explicit setting wins");
+});
+
+function textOfResult(out) { return (out?.content || []).map(c => c.text || "").join("\n"); }

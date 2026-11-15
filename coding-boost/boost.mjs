@@ -13,6 +13,11 @@
 //    calls alternating 6 times: the tool result says so and asks for another approach (plh harness/stuck.mjs).
 // 6. Self-review (agent_before_settle, opt-in): after a verified change, one bounded review pass by the same model with
 //    correctness, validation and scope roles (plh harness/task-review.mjs).
+// 7. Speed check (agent_before_settle): a request about speed that changed code is woken once, after its tests pass, to
+//    cost every step and time the code on a bigger, more varied input than the tests (given tests are often too small
+//    to catch a quadratic step). On for the models whose profile asks for it, or for all with PI_CODING_PERF_CHECK=on.
+// 8. Model profiles (PROFILES), switched on by model id. gpt-oss: edit hints from the first failed edit, the speed
+//    check, and a note when a read returns the same text as the last read of that file.
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,6 +43,28 @@ export const REVIEW_PROMPT = "Before you finish, perform one bounded self-review
   Object.entries(REVIEW_ROLES).map(([name, text]) => `${name}: ${text}`).join("\n\n") +
   "\n\nRead the diff first. Keep repairs within the request. End with the result and the checks actually run; do not ask for routine confirmation.";
 
+export const PERF_PROMPT = "This request is about speed, and the given tests may be much smaller than real inputs. Before you finish: " +
+  "(1) name the cost of every step of the changed code in terms of the input size, including work hidden in library calls, " +
+  "sort keys and membership or search operations inside loops; anything slower than about n log n must go. " +
+  "(2) Time it with bash on an input at least 10 times larger than the biggest test, with many distinct values, and print the seconds. " +
+  "(3) If it is not comfortably fast, fix it and run the tests again. Reply with the timing you measured.";
+const SPEED_WORDS = /\b(slow|slower|too slow|fast|faster|fast enough|speed|speed up|performance|perf|time limit|times? out|timeout|efficient|efficiently|large inputs?|scales?)\b/i;
+export const isSpeedRequest = text => SPEED_WORDS.test(String(text || ""));
+
+/** Settings switched on by model id; an environment variable set to on/off still wins. */
+export const PROFILES = [
+  {
+    id: "gpt-oss",
+    match: model => /^gpt-oss(?::|-|$)/i.test(model ?? ""),
+    why: "gpt-oss on agentic-v1 (2026-11-14): re-read files it had just read and retried failed edits from memory (about twice qwen's tool calls); its speed fix passed the given test but kept a quadratic step.",
+    editHintAfter: 1,
+    perfCheck: true,
+    rereadNote: true,
+  },
+];
+export const profileFor = (model, opts = {}) => opts.profiles === false ? null : PROFILES.find(p => p.match(model)) || null;
+const auto = (setting, profileValue) => setting === "on" || (setting !== "off" && Boolean(profileValue));
+
 export const verifyNudge = files => `You changed ${files} and no passing test ran on that code yet. Run the tests, fix what fails, and finish the request. If it cannot be tested, say why in one line.`;
 
 export function options(env = process.env) {
@@ -62,6 +89,11 @@ export function options(env = process.env) {
     // off, on (every model) or a regular expression for the model ids that get it.
     selfReview: review === "off" ? null : review === "on" ? /./ : safeRegExp(review),
     log: env.PI_CODING_LOG || "",
+    profiles: on("PI_CODING_PROFILE"),
+    // "auto" (the model's profile decides), "on" or "off"
+    perfCheck: ["on", "off"].includes(env.PI_CODING_PERF_CHECK) ? env.PI_CODING_PERF_CHECK : "auto",
+    rereadNote: ["on", "off"].includes(env.PI_CODING_REREAD_NOTE) ? env.PI_CODING_REREAD_NOTE : "auto",
+    hintAfterSet: env.PI_CODING_EDIT_HINT_AFTER !== undefined && env.PI_CODING_EDIT_HINT_AFTER !== "",
   };
 }
 const safeRegExp = source => { try { return new RegExp(source); } catch { return null; } };
@@ -209,11 +241,11 @@ const textOf = content => (content || []).filter(part => part?.type === "text").
 const isCode = path => !/\.(md|markdown)$/i.test(path);
 
 export function installCodingBoost(pi, opts = options(), { now = () => Date.now() } = {}) {
-  const stats = { prompts: 0, guides: 0, wakes: 0, unverified: 0, reviews: 0, editHints: 0, loops: 0 };
+  const stats = { prompts: 0, guides: 0, wakes: 0, unverified: 0, reviews: 0, editHints: 0, loops: 0, perfChecks: 0, rereads: 0 };
   if (!opts.enabled) return { stats };
   const guides = opts.guides ? [...loadGuides(), ...(opts.guidesDir ? loadGuides(opts.guidesDir) : [])] : [];
   let wakes = 0, reviewed = false, seq = 0, passedAt = 0, lastAnswer = "", steps = [];
-  let changed = new Map(), editFailures = new Map();
+  let changed = new Map(), editFailures = new Map(), speed = false, perfChecked = false, lastReads = new Map();
 
   const record = (event, ctx, data = {}) => {
     const entry = { event, at: new Date(now()).toISOString(), model: ctx?.model?.id, ...data };
@@ -227,7 +259,8 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
   // A new request from the person starts fresh. The extension's own follow-ups continue the same run
   // (agent_before_settle), so they never reach here and cannot reset the wake-up budget.
   pi.on("before_agent_start", (event, ctx) => {
-    wakes = 0; reviewed = false; changed = new Map(); editFailures = new Map(); steps = [];
+    wakes = 0; reviewed = false; changed = new Map(); editFailures = new Map(); steps = []; lastReads = new Map();
+    speed = isSpeedRequest(event?.prompt); perfChecked = false;
     const parts = [];
     if (opts.rules) parts.push(CODING_RULES);
     if (opts.terse) parts.push(TERSE_STYLE);
@@ -246,6 +279,17 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
   pi.on("tool_result", (event, ctx) => {
     const tool = event?.toolName, input = event?.input || {}, text = textOf(event?.content);
     const notes = [];
+    const profile = profileFor(ctx?.model?.id, opts);
+
+    if (tool === "read" && !event.isError && typeof input.path === "string" && auto(opts.rereadNote, profile?.rereadNote)) {
+      const key = `${resolve(cwdOf(ctx), input.path)}\u0000${input.offset ?? ""}\u0000${input.limit ?? ""}`;
+      if (lastReads.get(key) === text) {
+        stats.rereads++;
+        record("reread", ctx, { path: input.path });
+        notes.push(`${input.path} has not changed since your last read of it; that text is still current. Use it instead of reading again.`);
+      }
+      lastReads.set(key, text);
+    }
 
     if ((tool === "write" || tool === "edit") && !event.isError && typeof input.path === "string" && isCode(input.path)) {
       changed.set(resolve(cwdOf(ctx), input.path), ++seq);
@@ -261,7 +305,8 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
       else if (/could not find/i.test(text)) {
         const count = (editFailures.get(path) || 0) + 1;
         editFailures.set(path, count);
-        if (count >= opts.hintAfter) {
+        const hintAfter = !opts.hintAfterSet && profile?.editHintAfter ? profile.editHintAfter : opts.hintAfter;
+        if (count >= hintAfter) {
           let content = "";
           try { content = readFileSync(path, "utf8"); } catch {}
           const hints = [];
@@ -307,6 +352,11 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
       return undefined;
     }
     const model = ctx?.model?.id || "";
+    if (speed && !perfChecked && changed.size && !files.length && !asking && wakes < opts.maxWakes
+        && auto(opts.perfCheck, profileFor(model, opts)?.perfCheck)) {
+      perfChecked = true; stats.perfChecks++;
+      return continueWith("speed check", PERF_PROMPT);
+    }
     if (opts.selfReview?.test(model) && !reviewed && changed.size && !files.length && !asking && wakes < opts.maxWakes) {
       reviewed = true; stats.reviews++;
       return continueWith("review", REVIEW_PROMPT);

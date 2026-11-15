@@ -1,6 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { installLocalModelGuard, options } from "../guard.mjs";
+import { installLocalModelGuard, options, listFolder, profileFor } from "../guard.mjs";
+import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 function fakePi({ tools = ["bash", "read", "edit", "write"], thinking = "off" } = {}) {
   const handlers = {}, sent = [], entries = [];
@@ -167,4 +170,50 @@ test("a turn past the compaction share compacts once with the open work kept", a
   await emit("agent_end", {}, small);
   later.splice(0).forEach(fn => fn());
   assert.equal(compacts.length, 1);
+});
+
+// --- gpt-oss profile -----------------------------------------------------------------------------------------------
+
+const gpt = { ...ctx, model: { provider: "ollama", id: "gpt-oss:20b" } };
+
+test("gpt-oss with thinking off gets reasoning_effort low (or the PI_GUARD_GPT_OSS_EFFORT setting); a set effort is kept", async () => {
+  const run = async (o, payload, c = gpt) => { const { pi, emit } = fakePi(); installLocalModelGuard(pi, o); return emit("before_provider_request", { payload }, c); };
+  assert.deepEqual(await run(opts, { model: "gpt-oss:20b" }), { model: "gpt-oss:20b", reasoning_effort: "low" });
+  assert.deepEqual(await run({ ...opts, gptOssEffort: "medium" }, { model: "gpt-oss:20b" }), { model: "gpt-oss:20b", reasoning_effort: "medium" });
+  assert.equal(await run({ ...opts, gptOssEffort: "default" }, { model: "gpt-oss:20b" }), undefined);
+  assert.equal(await run(opts, { model: "gpt-oss:20b", reasoning_effort: "high" }), undefined, "pi already chose an effort");
+  assert.equal(await run(opts, { model: "gpt-oss:20b" }, { ...gpt, thinkingLevel: "medium" }), undefined, "thinking on: pi decides");
+  assert.equal(await run(options({ PI_GUARD_PROFILE: "off" }), { model: "gpt-oss:20b" }), undefined);
+  assert.equal(options({ PI_GUARD_GPT_OSS_EFFORT: "high" }).gptOssEffort, "high");
+});
+
+test("listFolder lists files with folders indented, skipping hidden and build folders, within a limit", () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-ls-"));
+  mkdirSync(join(dir, "bank")); mkdirSync(join(dir, ".git")); mkdirSync(join(dir, "__pycache__"));
+  writeFileSync(join(dir, "bank", "ledger.py"), ""); writeFileSync(join(dir, "test_bank.py"), ""); writeFileSync(join(dir, ".env"), "");
+  assert.equal(listFolder(dir), "bank/\n  ledger.py\ntest_bank.py");
+  assert.equal(listFolder(dir, { max: 1 }), "bank/\n… and 2 more");
+});
+
+test("gpt-oss gets the working folder in the system prompt; other models only with PI_GUARD_LIST_FILES=on", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "guard-sp-"));
+  writeFileSync(join(dir, "words.py"), "");
+  const run = async (o, model) => { const { pi, emit } = fakePi(); installLocalModelGuard(pi, o);
+    return emit("before_agent_start", { prompt: "x", systemPrompt: "BASE" }, { ...ctx, cwd: dir, model: { provider: "ollama", id: model } }); };
+  const out = await run(opts, "gpt-oss:20b");
+  assert.match(out.systemPrompt, /^BASE\n\n## Working folder\n[\s\S]*words\.py[\s\S]*read takes a file path, not a folder/);
+  assert.equal(await run(opts, "qwen3.8:27b-mlx"), undefined);
+  assert.match((await run({ ...opts, listFiles: "on" }, "qwen3.8:27b-mlx")).systemPrompt, /words\.py/);
+  assert.equal(await run({ ...opts, listFiles: "off" }, "gpt-oss:20b"), undefined);
+});
+
+test("gpt-oss: read on a folder gets a hint to list it with bash", async () => {
+  const { pi, emit } = fakePi();
+  installLocalModelGuard(pi, opts);
+  const ev = { toolName: "read", input: { path: "" }, content: [{ type: "text", text: "EISDIR: illegal operation on a directory, read" }], isError: true };
+  const out = await emit("tool_result", ev, gpt);
+  assert.match(out.content.at(-1).text, /is a folder\. List it with bash \(ls\)/);
+  assert.equal(await emit("tool_result", ev, ctx), undefined, "not for other models");
+  assert.equal(await emit("tool_result", { ...ev, isError: false }, gpt), undefined);
+  assert.equal(profileFor("gpt-oss:20b").id, "gpt-oss");
 });
