@@ -17,6 +17,10 @@ code. Instead, it:
 | A turn with only thinking, nothing at all, or "I will now edit the file." with no call | Sends one short follow-up asking the model to act or answer. At most 2 per request by default. |
 | An answer cut off at the length limit | Asks the model to continue, more briefly. |
 | A request with no output at all for 2 minutes | Cancels it and asks the model to continue. Thinking counts as output, so long reasoning is not cut off. |
+| Reasoning that repeats itself (the same three thinking lines seen twice) | Stops the turn and asks the model to take the next step instead of working it out again. From pi-local-harness (lesson L-007). |
+| Chat-template tokens leaked into the answer (`<\|channel\|>`, `<channel\|>`) | Removes them, so later turns do not imitate them. From pi-local-harness. |
+| The server could not parse the model's tool call ("error parsing tool call: unexpected end of JSON input") | Asks once for a short valid tool call, unless a tool already changed something in this request, so no write is replayed. From pi-local-harness (task 370). |
+| A long session nearing the context limit | After a turn that passes 60% of the context window, compacts once, keeping the open work (request, decisions, files touched, what is left). From pi-local-harness (task 116). |
 
 Every action is recorded as a `local-model-guard` session entry. Type `/guard` to see the counts for the session.
 
@@ -44,20 +48,26 @@ Environment variables:
 | `PI_GUARD_IDLE_SECONDS` | `120` | Cancel a request after this long with no output (`0` turns the stall watch off) |
 | `PI_GUARD_TOTAL_SECONDS` | `1200` | Cancel a single model request after this long |
 | `PI_GUARD_LOG` | | Also append each action as a JSON line to this file |
+| `PI_GUARD_LOOP_WATCH` | on | `off` turns the reasoning-loop watch off |
+| `PI_GUARD_STRIP_TOKENS` | on | `off` keeps leaked template tokens |
+| `PI_GUARD_TOOL_JSON_RETRY` | on | `off` does not retry a tool call the server could not parse |
+| `PI_GUARD_COMPACT_AT` | `0.6` | Compact after a turn that passes this share of the context window (`0` turns it off) |
 
 ## How it works
 
 The rules are [AI Core](https://github.com/KakkoiDev/ai-core)'s turn policies (`classifyTurn`,
-`parseTextToolCalls`, `turnRecovery`, `createStallWatch`, `requestAdjustments`); this extension
+`parseTextToolCalls`, `turnRecovery`, `createStallWatch`, `createReasoningWatch`, `requestAdjustments`); this extension
 connects them to pi's hooks:
 
 | pi hook | Use |
 |---|---|
 | `before_provider_request` | Merge request fixes into the payload |
-| `message_end` | Classify the finished turn; replace a text tool call with a real one |
-| `agent_before_settle` | Add a follow-up message and continue once |
-| `message_start` / `message_update` / `provider_stream_event` | Stall watch |
-| `agent_settled` | After a stall was cancelled, ask the model to continue |
+| `message_end` | Remove template tokens; classify the finished turn; replace a text tool call with a real one |
+| `agent_before_settle` | Add a follow-up message and continue once (also after a broken tool call) |
+| `message_start` / `message_update` / `provider_stream_event` | Stall watch; reasoning-loop watch on thinking |
+| `tool_execution_start` | Note that a tool may have changed something, so a broken tool call is not retried |
+| `agent_end` | Compact once when the context passes the set share |
+| `agent_settled` | After a stall or a reasoning loop was cancelled, ask the model to continue |
 
 A new message from you resets the follow-up budget; the guard's own messages do not, so it
 cannot loop.

@@ -96,3 +96,75 @@ test("PI_GUARD=off disables everything", async () => {
   installLocalModelGuard(pi, options({ PI_GUARD: "off" }));
   assert.equal(await emit("before_provider_request", { payload: {} }, ctx), undefined);
 });
+
+test("leaked template tokens are removed from the answer", async () => {
+  const { pi, emit } = fakePi();
+  installLocalModelGuard(pi, opts);
+  const out = await emit("message_end", { message: assistant([{ type: "text", text: "<|channel|>Done.<channel|>" }]) }, ctx);
+  assert.equal(out.message.content[0].text, "Done.");
+  assert.equal(await emit("message_end", { message: assistant([{ type: "text", text: "a <b> c" }]) }, ctx), undefined);
+});
+
+test("a reasoning loop is stopped and the model is asked to act, within the nudge budget", async () => {
+  const { pi, emit, sent } = fakePi();
+  installLocalModelGuard(pi, opts);
+  const c = { ...ctx };
+  await emit("before_agent_start", {}, c);
+  await emit("agent_start", {}, c);
+  const think = delta => emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta } }, c);
+  await think("The test fails.\nI should read app.py.\nThen fix the import.\n");
+  assert.equal(c.aborted, undefined);
+  await think("Wait.\nThe test fails.\nI should read app.py.\nThen fix the import.\n");
+  assert.equal(c.aborted, true);
+  await emit("agent_settled", { aborted: true }, c);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0], /repeated the same lines/);
+});
+
+test("PI_GUARD_LOOP_WATCH=off leaves repeated reasoning alone", async () => {
+  const { pi, emit } = fakePi();
+  installLocalModelGuard(pi, { ...opts, loopWatch: false });
+  const c = { ...ctx };
+  await emit("agent_start", {}, c);
+  const lines = "a\nb\nc\n";
+  await emit("message_update", { assistantMessageEvent: { type: "thinking_delta", delta: lines + "x\n" + lines } }, c);
+  assert.equal(c.aborted, undefined);
+});
+
+test("broken tool JSON is retried once, but not after a tool changed something", async () => {
+  const broken = { role: "assistant", content: [], stopReason: "error", errorMessage: "error parsing tool call: raw='{\"path\":' err=unexpected end of JSON input" };
+  const { pi, emit } = fakePi();
+  installLocalModelGuard(pi, opts);
+  await emit("before_agent_start");
+  await emit("agent_start");
+  await emit("message_end", { message: broken }, ctx);
+  const out = await settle(emit, { outcome: "error" });
+  assert.equal(out.continue, true);
+  assert.match(out.entries.at(-1).content, /incomplete tool JSON/);
+
+  await emit("before_agent_start");
+  await emit("agent_start");
+  await emit("tool_execution_start", { toolName: "write" }, ctx);
+  await emit("message_end", { message: broken }, ctx);
+  assert.equal(await settle(emit, { outcome: "error" }), undefined, "a write may already have run: do not replay");
+});
+
+test("a turn past the compaction share compacts once with the open work kept", async () => {
+  const later = [];
+  const timers = { setTimeout: fn => later.push(fn), clearTimeout() {} };
+  const { pi, emit } = fakePi();
+  installLocalModelGuard(pi, { ...opts, compactAt: 0.6 }, { timers });
+  const compacts = [];
+  const c = { ...ctx, getContextUsage: () => ({ tokens: 20_000, contextWindow: 32_768 }), compact: o => compacts.push(o) };
+  await emit("agent_start", {}, c);
+  await emit("agent_end", {}, c);
+  await emit("agent_end", {}, c);
+  later.splice(0).forEach(fn => fn());
+  assert.equal(compacts.length, 1);
+  assert.match(compacts[0].customInstructions, /Keep the open work/);
+  const small = { ...c, getContextUsage: () => ({ tokens: 10_000, contextWindow: 32_768 }) };
+  await emit("agent_start", {}, small);
+  await emit("agent_end", {}, small);
+  later.splice(0).forEach(fn => fn());
+  assert.equal(compacts.length, 1);
+});

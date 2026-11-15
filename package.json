@@ -1,20 +1,20 @@
 {
   "name": "@kakkoidev/pi-core",
   "version": "0.1.0",
-  "description": "Pi extensions and tools: keep local models on track (local-model-guard) and wake the agent when background jobs finish (async-rewake).",
+  "description": "Pi extensions and tools: keep local models on track (local-model-guard), give them the coding habits of pi-local-harness (coding-boost), and wake the agent when background jobs finish (async-rewake).",
   "type": "module",
   "license": "MIT",
-  "keywords": ["pi-package", "pi-extension", "local-models", "ollama", "gemma", "qwen"],
+  "keywords": ["pi-package", "pi-extension", "local-models", "ollama", "gemma", "qwen", "coding-agent"],
   "pi": {
-    "extensions": ["./local-model-guard/index.ts", "./async-rewake/extension"]
+    "extensions": ["./local-model-guard/index.ts", "./coding-boost/index.ts", "./async-rewake/extension"]
   },
   "bin": {
     "pi-async-rewake": "async-rewake/bin/pi-async-rewake"
   },
-  "files": ["local-model-guard", "async-rewake/bin", "async-rewake/lib", "async-rewake/extension", "README.md", "LICENSE"],
+  "files": ["local-model-guard", "coding-boost", "async-rewake/bin", "async-rewake/lib", "async-rewake/extension", "README.md", "LICENSE"],
   "engines": { "node": ">=20" },
   "scripts": {
-    "test": "node --test 'local-model-guard/test/*.test.mjs' 'async-rewake/test/*.test.js'"
+    "test": "node --test 'local-model-guard/test/*.test.mjs' 'coding-boost/test/*.test.mjs' 'async-rewake/test/*.test.js'"
   },
   "dependencies": {
     "@kakkoidev/ai-core": "https://codeload.github.com/KakkoiDev/ai-core/tar.gz/01afa5e8ec6dd5011148f3797ceabe50e6eebdc8"
