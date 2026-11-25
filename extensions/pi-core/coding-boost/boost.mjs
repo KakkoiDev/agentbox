@@ -21,7 +21,7 @@
 import { appendFileSync, existsSync, readdirSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { detectActionLoop } from "../vendor/ai-core/recovery.mjs";
+import { detectActionLoop } from "@kakkoidev/ai-core";
 
 const ENTRY = "coding-boost";
 

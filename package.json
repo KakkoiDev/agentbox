@@ -1,0 +1,17 @@
+{
+  "name": "agentbox",
+  "version": "0.2.0",
+  "description": "The pi coding agent in a macOS sandbox, set up per model from bench results to get the most out of local models (and DeepSeek)",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "agentbox": "bin/agentbox.mjs" },
+  "files": ["bin", "extensions", "README.md", "LICENSE"],
+  "engines": { "node": ">=20" },
+  "os": ["darwin"],
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs' 'extensions/pi-core/local-model-guard/test/*.test.mjs' 'extensions/pi-core/coding-boost/test/*.test.mjs' 'extensions/pi-core/async-rewake/test/*.test.js'"
+  },
+  "dependencies": {
+    "@kakkoidev/ai-core": "github:KakkoiDev/ai-core#v0.4.0"
+  }
+}
