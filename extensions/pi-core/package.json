@@ -1,7 +1,7 @@
 {
   "name": "@kakkoidev/pi-core",
   "version": "0.1.0",
-  "description": "Pi extensions and tools: keep local models on track (local-model-guard), give them the coding habits of pi-local-harness (coding-boost), and wake the agent when background jobs finish (async-rewake). Merged into agentbox (2026-11-25); ai-core is vendored in vendor/ai-core.",
+  "description": "Pi extensions and tools: keep local models on track (local-model-guard), give them the coding habits of pi-local-harness (coding-boost), and wake the agent when background jobs finish (async-rewake). Merged into agentbox (2026-11-25); ai-core comes from agentbox's own dependencies.",
   "type": "module",
   "license": "MIT",
   "keywords": [
