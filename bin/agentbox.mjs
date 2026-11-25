@@ -44,6 +44,7 @@ const HELP = `agentbox ${VERSION}: the pi coding agent in a macOS sandbox, set u
   agentbox proxy                         serve the DeepSeek proxy on 127.0.0.1:${DEEPSEEK_PORT} (started for you when needed)
   agentbox spent                         what DeepSeek has cost so far
   agentbox install SOURCE                add a pi package to agentbox's own pi config
+  agentbox report [--repo owner/name]    turn this folder's last session into an issue on agentbench (you edit it first)
 
 The sandbox: writes only in the current folder, agentbox's state and a private temp folder; no other reads in your
 home folder (except git's config and where pi and node are installed); never ~/.ssh, ~/.aws, keychains or API keys;
@@ -65,6 +66,7 @@ function parse(argv) {
     else if (x === "--allow-home") a.allowHome = true;
     else if (x === "--no-sandbox") a.noSandbox = true;
     else if (x === "--json") a.json = true;
+    else if (x === "--repo") a.repo = argv[++i];
     else if (x === "-h" || x === "--help") a.help = true;
     else if (x === "--version") a.version = true;
     else a.rest.push(x);
@@ -164,9 +166,72 @@ async function run(a) {
   child.on("exit", (code, signal) => process.exit(code ?? (signal ? 1 : 0)));
 }
 
+const textOf = (content) => typeof content === "string" ? content : (content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+
+/** The draft of a real-life report: what was asked, how the session went, how it ended. */
+function draftReport(sessionFile) {
+  const lines = readFileSync(sessionFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  const msgs = lines.filter((l) => l.type === "message").map((l) => l.message);
+  const model = lines.findLast((l) => l.type === "model_change");
+  const thinking = lines.findLast((l) => l.type === "thinking_level_change")?.thinkingLevel ?? "off";
+  const asked = msgs.filter((m) => m.role === "user").map((m) => textOf(m.content));
+  const results = msgs.filter((m) => m.role === "toolResult");
+  const last = msgs.findLast((m) => m.role === "assistant" && textOf(m.content).trim());
+  const clip = (t, n) => (t.length > n ? t.slice(0, n) + "\n[...]" : t);
+  return [
+    `# Real-life task: ${(asked[0] ?? "").split("\n")[0].slice(0, 70)}`,
+    "",
+    "<!-- This becomes a PUBLIC issue. Remove anything private (code, names, paths, data) before saving.",
+    "     The first line is the title. Save it unchanged, or empty, to cancel. -->",
+    "",
+    "## What went wrong",
+    "",
+    "(say what the agent got wrong, or what it should have done)",
+    "",
+    "## What was asked",
+    "",
+    ...asked.map((t) => "> " + clip(t, 1500).replaceAll("\n", "\n> ")),
+    "",
+    "## The session",
+    "",
+    `- model: ${model ? `${model.provider}/${model.modelId}` : "?"}, thinking ${thinking}, agentbox ${VERSION}`,
+    `- ${msgs.filter((m) => m.role === "assistant").length} turns, ${results.length} tool calls, ${results.filter((r) => r.isError).length} failed`,
+    `- extensions: ${lines.filter((l) => l.type === "custom").map((l) => l.customType).filter((v, i, a) => a.indexOf(v) === i).join(", ") || "none logged"}`,
+    "",
+    "## How it ended",
+    "",
+    "```",
+    clip(last ? textOf(last.content) : "(no reply)", 2000),
+    "```",
+    "",
+  ].join("\n");
+}
+
+async function report(a) {
+  const repo = a.repo || config().reportRepo || "KakkoiDev/agentbench";
+  if (!which("gh")) die("report needs the GitHub CLI (gh), signed in");
+  const dir = join(PI_HOME, "sessions", "--" + realpathSync(process.cwd()).replace(/^\//, "").replaceAll("/", "-") + "--");
+  const files = existsSync(dir) ? spawnSync("/bin/ls", ["-t", dir], { encoding: "utf8" }).stdout.split("\n").filter((f) => f.endsWith(".jsonl")) : [];
+  if (!files.length) die(`no agentbox session in this folder (looked in ${dir})`);
+  const draft = draftReport(join(dir, files[0]));
+  mkdirSync(join(STATE, "reports"), { recursive: true });
+  const file = join(STATE, "reports", files[0].replace(/\.jsonl$/, ".md"));
+  writeFileSync(file, draft);
+  const editor = process.env.VISUAL || process.env.EDITOR || "vi";
+  spawnSync(editor, [file], { stdio: "inherit", shell: true });
+  const text = readFileSync(file, "utf8").replace(/<!--[\s\S]*?-->\n*/g, "").trim();
+  const [title, ...body] = text.split("\n");
+  if (!text || text === draft.replace(/<!--[\s\S]*?-->\n*/g, "").trim()) die(`cancelled: the draft was not edited (kept in ${file})`);
+  const args = ["issue", "create", "-R", repo, "--title", title.replace(/^#\s*/, ""), "--body", body.join("\n").trim()];
+  let r = spawnSync("gh", [...args, "--label", "real-life"], { encoding: "utf8" });
+  if (r.status !== 0 && /label/i.test(r.stderr)) r = spawnSync("gh", args, { encoding: "utf8" });   // the label may not exist yet
+  if (r.status !== 0) die(`gh: ${r.stderr.trim()} (draft kept in ${file})`);
+  console.log(r.stdout.trim());
+}
+
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const a = parse(cmd && ["models", "harness", "doctor", "proxy", "spent", "install"].includes(cmd) ? rest : argv);
+  const a = parse(cmd && ["models", "harness", "doctor", "proxy", "spent", "install", "report"].includes(cmd) ? rest : argv);
   if (a.version) return console.log(`agentbox ${VERSION}`);
   if (a.help) return console.log(HELP);
   switch (cmd) {
@@ -199,6 +264,8 @@ async function main(argv) {
     }
     case "spent":
       return console.log(`$${deepseekSpent(USAGE).toFixed(4)} of $${deepseekCap(BUDGET)} (cap: "usd" in ${BUDGET})`);
+    case "report":
+      return report(a);
     case "install":
       await writePiConfig(null);
       return spawn("pi", ["install", ...a.rest], { stdio: "inherit", env: { ...process.env, PI_CODING_AGENT_DIR: PI_HOME } }).on("exit", (c) => process.exit(c ?? 1));
