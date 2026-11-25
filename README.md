@@ -28,6 +28,14 @@ If npm's global folder isn't writable (Nix, for example), install into `~/.local
 npm install -g --prefix ~/.local github:KakkoiDev/agentbox
 ```
 
+To update to the latest version later:
+
+```bash
+agentbox update
+```
+
+It reinstalls from GitHub into the same place, so it works for either install.
+
 ## Use
 
 In a project folder:
@@ -45,6 +53,8 @@ agentbox
 - `agentbox harness -m MODEL` shows what that model gets and the bench result behind each part.
 - `agentbox spent` shows what DeepSeek has cost so far.
 - `agentbox install SOURCE` adds a pi package to agentbox's own pi config.
+- `agentbox report` turns the session you just had in this folder into an issue on agentbench, after you edit it.
+- `agentbox update` installs the latest version.
 
 DeepSeek needs your API key in `~/.config/deepseek/api-key` (`chmod 600`). agentbox starts a small proxy on
 127.0.0.1:8096 that holds the key, logs each request's cost and stops at a $25 cap (set `usd` in
@@ -78,10 +88,14 @@ agentbox refuses to run in your home folder itself unless you pass `--allow-home
 `~/.config/agentbox/config.json` is optional:
 
 ```json
-{"model": "ollama/qwen3.8:27b", "thinking": "off", "extensions": ["coding-boost"], "net": false}
+{"model": "ollama/qwen3.8:27b", "thinking": "off", "extensions": ["coding-boost"], "net": false, "issues": true}
 ```
 
 `extensions` takes part names (`coding-boost`, `async-rewake`, `local-model-guard`) or paths to any pi extension.
+
+`"issues": false` (or `AGENTBOX_ISSUES=off`) means this agentbox never files an issue: `agentbox report` refuses, and
+agentbench's `bench_issues.py` skips bench runs made through it. Nothing is ever sent without one of those two
+commands; this switch makes sure of it.
 
 ## History
 

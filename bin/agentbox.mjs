@@ -44,13 +44,17 @@ const HELP = `agentbox ${VERSION}: the pi coding agent in a macOS sandbox, set u
   agentbox proxy                         serve the DeepSeek proxy on 127.0.0.1:${DEEPSEEK_PORT} (started for you when needed)
   agentbox spent                         what DeepSeek has cost so far
   agentbox install SOURCE                add a pi package to agentbox's own pi config
+  agentbox update                        install the latest agentbox from GitHub (same place as this one)
   agentbox report [--repo owner/name]    turn this folder's last session into an issue on agentbench (you edit it first)
 
 The sandbox: writes only in the current folder, agentbox's state and a private temp folder; no other reads in your
 home folder (except git's config and where pi and node are installed); never ~/.ssh, ~/.aws, keychains or API keys;
 network only to the model's port. Config (optional): ${CONFIG}
-  {"model": "ollama/qwen3.8:27b", "thinking": "off", "extensions": ["coding-boost"], "net": false}`;
+  {"model": "ollama/qwen3.8:27b", "thinking": "off", "extensions": ["coding-boost"], "net": false, "issues": true}
+  "issues": false (or AGENTBOX_ISSUES=off) never files issues: \`agentbox report\` refuses, and bench runs made
+  through this agentbox are skipped by agentbench's bench_issues.py.`;
 
+const issuesOn = () => !/^(0|off|false|no)$/i.test(process.env.AGENTBOX_ISSUES ?? "") && config().issues !== false;
 const die = (m) => { console.error(`agentbox: ${m}`); process.exit(1); };
 const config = () => { try { return JSON.parse(readFileSync(CONFIG, "utf8")); } catch { return {}; } };
 const which = (exe) => { const r = spawnSync("/usr/bin/which", [exe], { encoding: "utf8" }); return r.status === 0 ? r.stdout.trim() : null; };
@@ -208,6 +212,7 @@ function draftReport(sessionFile) {
 }
 
 async function report(a) {
+  if (!issuesOn()) die(`issues are off (${process.env.AGENTBOX_ISSUES ? "AGENTBOX_ISSUES" : `"issues": false in ${CONFIG}`}): nothing was sent`);
   const repo = a.repo || config().reportRepo || "KakkoiDev/agentbench";
   if (!which("gh")) die("report needs the GitHub CLI (gh), signed in");
   const dir = join(PI_HOME, "sessions", "--" + realpathSync(process.cwd()).replace(/^\//, "").replaceAll("/", "-") + "--");
@@ -231,7 +236,7 @@ async function report(a) {
 
 async function main(argv) {
   const [cmd, ...rest] = argv;
-  const a = parse(cmd && ["models", "harness", "doctor", "proxy", "spent", "install", "report"].includes(cmd) ? rest : argv);
+  const a = parse(cmd && ["models", "harness", "doctor", "proxy", "spent", "install", "report", "update"].includes(cmd) ? rest : argv);
   if (a.version) return console.log(`agentbox ${VERSION}`);
   if (a.help) return console.log(HELP);
   switch (cmd) {
@@ -243,7 +248,7 @@ async function main(argv) {
       if (!a.model) die("harness needs --model");
       const exts = extensionsFor(a.model, config().extensions ?? []);
       const out = { model: a.model, thinking: a.thinking ?? null, version: VERSION, profiles: HARNESS_PROFILES.about,
-        extensions: exts, prompts: [], pi_args: exts.flatMap((e) => ["-e", e.path]) };
+        issues: issuesOn(), extensions: exts, prompts: [], pi_args: exts.flatMap((e) => ["-e", e.path]) };
       if (a.json) return console.log(JSON.stringify(out));
       for (const e of exts) console.log(`${e.part}  ${e.path}\n    ${e.why}`);
       return;
@@ -264,6 +269,15 @@ async function main(argv) {
     }
     case "spent":
       return console.log(`$${deepseekSpent(USAGE).toFixed(4)} of $${deepseekCap(BUDGET)} (cap: "usd" in ${BUDGET})`);
+    case "update": {
+      // PKG is <prefix>/lib/node_modules/agentbox: reinstall into the same prefix, from GitHub's main branch
+      const prefix = resolve(PKG, "../../..");
+      if (existsSync(join(PKG, ".git")) || !PKG.endsWith("/lib/node_modules/agentbox")) die(`this agentbox runs from ${PKG} (a development copy): update it with git pull there`);
+      console.log(`agentbox ${VERSION} -> latest, into ${prefix}`);
+      const r = spawnSync("npm", ["install", "-g", "--prefix", prefix, "github:KakkoiDev/agentbox"], { stdio: "inherit" });
+      if (r.status !== 0) process.exit(r.status ?? 1);
+      return console.log(spawnSync(join(prefix, "bin/agentbox"), ["--version"], { encoding: "utf8" }).stdout.trim());
+    }
     case "report":
       return report(a);
     case "install":
