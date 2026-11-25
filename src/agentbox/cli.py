@@ -183,7 +183,7 @@ def run(a, rest):
     from . import harness
     thinking = a.thinking or cfg_user.get('thinking')
     h = harness.for_model(model, thinking)
-    user_exts = [str(Path(e).expanduser()) for e in cfg_user.get('extensions', [])]
+    user_exts = [str(Path(harness.resolve_extension(e)).expanduser()) for e in cfg_user.get('extensions', [])]
     exts = [e['path'] for e in h['extensions']] + user_exts
     cmd = ['pi', '--model', model] + (['--thinking', thinking] if thinking else [])
     cmd += h['pi_args'] + [x for e in user_exts for x in ('-e', e)] + rest

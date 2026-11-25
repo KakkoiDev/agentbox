@@ -24,7 +24,7 @@
 //    a folder.
 import { appendFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { classifyTurn, turnRecovery, parseTextToolCalls, createStallWatch, createReasoningWatch, requestAdjustments } from "@kakkoidev/ai-core";
+import { classifyTurn, turnRecovery, parseTextToolCalls, createStallWatch, createReasoningWatch, requestAdjustments } from "../vendor/ai-core/recovery.mjs";
 
 const STALL_NUDGE = "Your last response stopped producing output and was cancelled. Continue the task: call a tool to make progress, or reply with your final answer.";
 const LOOP_NUDGE = "Your reasoning repeated the same lines and was stopped. Do not work it out again: take the next concrete step now with a tool call, another way if the last one failed, or reply with your final answer.";

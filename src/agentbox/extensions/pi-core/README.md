@@ -1,5 +1,7 @@
 # pi-core
 
+> Merged into [agentbox](../../../../README.md) on 2026-11-25. agentbox loads each extension for the models a bench showed it helps (`agentbox harness --model X`); the rest can be turned on in `~/.config/agentbox/config.json`. The install steps below are for using these extensions in plain pi.
+
 Extensions and tools for [pi](https://pi.dev), in one package.
 
 | Part | What it does |
