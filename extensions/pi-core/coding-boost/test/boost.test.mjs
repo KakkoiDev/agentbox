@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { installCodingBoost, options, isTestRun, chooseGuides, loadGuides, closestText, stuckPattern, isSpeedRequest, profileFor, PERF_PROMPT } from "../boost.mjs";
+import { installCodingBoost, options, isTestRun, testOutcome, chooseGuides, loadGuides, closestText, stuckPattern, isSpeedRequest, profileFor, PERF_PROMPT } from "../boost.mjs";
 
 function fakePi() {
   const handlers = {}, entries = [];
@@ -224,3 +224,37 @@ test("gpt-oss: the closest current text comes with the first failed edit", async
 });
 
 function textOfResult(out) { return (out?.content || []).map(c => c.text || "").join("\n"); }
+
+test("project check scripts and PI_CODING_TEST_COMMANDS count as test runs", () => {
+  for (const yes of ["./check", "./fight --vs ts-starter --games 40", "cd ws && ./fight", "make check 2>&1"]) assert.equal(isTestRun(yes), true, yes);
+  assert.equal(isTestRun("./fight | tail -5"), false);
+  assert.equal(isTestRun("./play --quick"), false);
+  const extra = options({ PI_CODING_TEST_COMMANDS: "./play --quick, just test" }).testCommands;
+  assert.deepEqual(extra, [["./play", "--quick"], ["just", "test"]]);
+  assert.equal(isTestRun("./play --quick --seed 3", undefined, extra), true);
+  assert.equal(isTestRun("just test", undefined, extra), true);
+});
+
+test("the verify part's settings: only the verify loop and the short rule", async () => {
+  const env = { PI_CODING_RULES: "off", PI_CODING_TERSE: "off", PI_CODING_GUIDES: "off", PI_CODING_EDIT_HINTS: "off", PI_CODING_LOOP_WATCH: "off", PI_CODING_PROFILE: "off", PI_CODING_VERIFY: "on", PI_CODING_VERIFY_RULE: "on" };
+  const { pi, emit } = fakePi();
+  installCodingBoost(pi, options(env));
+  const out = await start(emit, "it crashes on empty input");
+  assert.match(out.systemPrompt, /## Test before you finish/);
+  assert.doesNotMatch(out.systemPrompt, /## Coding|terse/);
+  await wrote(emit, "bot.py");
+  assert.equal((await settle(emit))?.continue, true);
+  await ran(emit, "./fight --games 10", false, "won 7/10");
+  assert.equal(await settle(emit), undefined);
+});
+
+test("testOutcome reads a test run's result where the exit code is lost", () => {
+  assert.equal(testOutcome("python3 -m unittest -v; echo \"exit=$?\"; python3 -c 'print(1)'", "Ran 4 tests in 0.001s\n\nOK\nexit=0\n1", false), "pass");
+  assert.equal(testOutcome("python3 -m unittest -v; echo \"exit=$?\"", "Ran 4 tests\n\nFAILED (failures=1)\nexit=1", false), "fail");
+  assert.equal(testOutcome("pytest -q && echo done", "", true), "fail");
+  assert.equal(testOutcome("pytest -q && echo done", "3 passed in 0.1s\ndone", false), "pass");
+  assert.equal(testOutcome("pytest -q; echo hi", "hi", false), null);
+  assert.equal(testOutcome("pytest | tail -3", "3 passed", false), null);
+  assert.equal(testOutcome("ls; cat a.py", "x", false), null);
+  assert.equal(testOutcome("cd ws && ./fight --games 10", "won 7/10", false), "pass");
+});

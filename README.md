@@ -68,8 +68,10 @@ DeepSeek needs your API key in `~/.config/deepseek/api-key` (`chmod 600`). agent
 | command-timeout | every model | pi's bash tool has no timeout; one endless command used a task's whole 15 minutes (agentic-v4) |
 | local-model-guard | Gemma models | Gemma 4 26B went from 0–1/5 with a long hang every run to 3/5 with none (agentic-v1) |
 
-`coding-boost` (coding rules, guides, a wake-up to test unverified changes) and `async-rewake` (background jobs)
-are included but off: no bench has shown a gain from them yet. Turn them on in the config.
+`coding-boost` (coding rules, guides, a wake-up to test unverified changes), `verify` (only the "test yourself first"
+part of coding-boost, for any kind of task: a change with no passing test run after it wakes the agent to test it) and
+`async-rewake` (background jobs) are included but off: no bench has shown a gain from them yet (`verify` is being
+measured per kind of task). Turn them on in the config.
 
 ## The sandbox
 
@@ -91,7 +93,7 @@ agentbox refuses to run in your home folder itself unless you pass `--allow-home
 {"model": "ollama/qwen3.8:27b", "thinking": "off", "extensions": ["coding-boost"], "net": false, "issues": true}
 ```
 
-`extensions` takes part names (`coding-boost`, `async-rewake`, `local-model-guard`) or paths to any pi extension.
+`extensions` takes part names (`coding-boost`, `verify`, `async-rewake`, `local-model-guard`) or paths to any pi extension.
 
 `"issues": false` (or `AGENTBOX_ISSUES=off`) means this agentbox never files an issue: `agentbox report` refuses, and
 agentbench's `bench_issues.py` skips bench runs made through it. Nothing is ever sent without one of those two

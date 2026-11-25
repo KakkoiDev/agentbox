@@ -26,6 +26,7 @@
   "files": [
     "local-model-guard",
     "coding-boost",
+    "verify",
     "async-rewake/bin",
     "async-rewake/lib",
     "async-rewake/extension",

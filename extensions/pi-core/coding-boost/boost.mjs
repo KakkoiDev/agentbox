@@ -29,6 +29,10 @@ export const CODING_RULES = `## Coding
 
 Inspect the relevant files before changing them, and preserve unrelated edits. Change existing files with edit, not by rewriting them whole or with shell scripts. Write tests for the change and run them until they pass; run them without pipes or \`|| true\` so their exit code counts. A syntax check or running the program is not a test run. Never call a check passed that you did not run: if something could not be verified, say "not verified" and why.`;
 
+export const VERIFY_RULE = `## Test before you finish
+
+Before you call a change done, test it: run the project's tests or checks (or write a small one) on the changed code, read the result, and fix what fails. Run them so their exit code counts. If something cannot be tested, say "not verified" and why.`;
+
 export const TERSE_STYLE = `## Answer style: terse
 
 Answer as briefly as possible. Give the answer directly: do not restate the request, repeat the plan, announce what you are about to do, or add filler, pleasantries or a closing summary. For code, reply with only the code, and put code that belongs in a file in a tool call, not in the answer.
@@ -82,6 +86,10 @@ export function options(env = process.env) {
     guidesDir: env.PI_CODING_GUIDES_DIR || "",
     maxGuides: num("PI_CODING_MAX_GUIDES", 2),
     verify: on("PI_CODING_VERIFY"),
+    // one short "test before you finish" section, for when the coding rules (which say it already) are off
+    verifyRule: env.PI_CODING_VERIFY_RULE === "on",
+    // more test commands, comma-separated, e.g. "./play --quick, just test"
+    testCommands: String(env.PI_CODING_TEST_COMMANDS || "").split(",").map(c => c.trim().split(/\s+/)).filter(c => c[0]),
     maxWakes: num("PI_CODING_MAX_WAKES", 2),
     editHints: on("PI_CODING_EDIT_HINTS"),
     hintAfter: Math.max(1, num("PI_CODING_EDIT_HINT_AFTER", 2)),
@@ -126,6 +134,8 @@ const TEST_COMMANDS = [
   ["npx", "vitest"], ["npx", "jest"], ["npx", "--no-install", "vitest"], ["npx", "--no-install", "jest"], ["vitest"], ["jest"],
   ["go", "test"], ["cargo", "test"], ["make", "test"], ["deno", "test"], ["mvn", "test"], ["gradle", "test"], ["./gradlew", "test"],
   ["dotnet", "test"], ["swift", "test"], ["mix", "test"], ["bundle", "exec", "rspec"], ["rspec"], ["phpunit"], ["vendor/bin/phpunit"],
+  // a project's own check scripts (the arena benches give ./check and ./fight); more with PI_CODING_TEST_COMMANDS
+  ["./check"], ["./fight"], ["./test"], ["./test.sh"], ["./run_tests.sh"], ["./run-tests"], ["make", "check"], ["npm", "run", "check"],
 ];
 const NOT_A_RUN = new Set(["--help", "-h", "-help", "--version", "-V", "-version", "--collect-only", "--co", "--list", "-list", "--listTests", "--list-tests", "--showOnly"]);
 const NO_TESTS = /\bno tests ran\b|^Ran 0 tests\b|\bNo tests? files? found\b|\bno test files\b|\bcollected 0 items\b/im;
@@ -159,26 +169,50 @@ export function shellTokens(command) {
   return out;
 }
 
-/** True when a bash command is a test run whose exit code counts: a known runner last, nothing piping or masking it. */
-export function isTestRun(command, output) {
+/** A command's segments (words before any redirect) and the operator after each; null when it pipes or masks. */
+function segmentsOf(command) {
   const tokens = shellTokens(command);
-  if (!tokens?.length) return false;
+  if (!tokens?.length) return null;
   const segments = []; let current = [];
   for (const token of [...tokens, { op: ";" }]) {
     if (typeof token === "object") {
-      if (["|", "||", "&"].includes(token.op)) return false;
+      if (["|", "||", "&"].includes(token.op)) return null;
       if (token.op === ">" || token.op === "<") { current.push(token); continue; }
-      if (current.length) segments.push(current);
+      if (current.length) {
+        const redirect = current.findIndex(word => typeof word === "object");
+        segments.push({ words: redirect >= 0 ? current.slice(0, redirect) : current, op: token.op });
+      }
       current = [];
     } else current.push(token);
   }
-  let words = segments.at(-1) || [];
-  const redirect = words.findIndex(word => typeof word === "object");
-  if (redirect >= 0) words = words.slice(0, redirect);
+  return segments;
+}
+const isRunner = (words, extra) => {
   while (words.length && (WRAPPERS.has(words[0].split("/").pop()) || /^\w+=/.test(words[0]))) words = words.slice(1);
   if (!words.length || words.slice(1).some(word => NOT_A_RUN.has(word.split("=")[0]))) return false;
-  if (!TEST_COMMANDS.some(prefix => prefix.every((word, i) => words[i] === word))) return false;
+  return [...TEST_COMMANDS, ...extra].some(prefix => prefix.every((word, i) => words[i] === word));
+};
+
+/** True when a bash command is a test run whose exit code counts: a known runner last, nothing piping or masking it. */
+export function isTestRun(command, output, extra = []) {
+  const segments = segmentsOf(command);
+  if (!segments?.length || !isRunner(segments.at(-1).words, extra)) return false;
   return output === undefined || !NO_TESTS.test(String(output));
+}
+
+const TESTS_FAILED = /\bFAILED\b|\b\d+ (failed|errors?)\b|^Traceback \(most recent call last\)|\bnot ok\b|^FAIL\b|\bexit(?: code)?[=:]\s*[1-9]/m;
+const TESTS_PASSED = /^OK\b|\b\d+ passed\b|\btests? passed\b|^ok\b|^PASS\b|\bexit(?: code)?[=:]\s*0\b|^ℹ fail 0$/m;
+
+/** "pass", "fail" or null (no test run, or its result cannot be told) for a bash call. A runner last, or anywhere in an
+ * all-&& chain, has its exit code in the call's; elsewhere (`pytest -q; echo "exit=$?"`) the output decides. */
+export function testOutcome(command, output, isError, extra = []) {
+  const segments = segmentsOf(command), text = String(output ?? "");
+  if (!segments?.length || NO_TESTS.test(text)) return null;
+  const at = segments.findIndex(segment => isRunner(segment.words, extra));
+  if (at < 0) return null;
+  if (at === segments.length - 1 || segments.slice(at, -1).every(segment => segment.op === "&&")) return isError ? "fail" : "pass";
+  if (TESTS_FAILED.test(text)) return "fail";
+  return TESTS_PASSED.test(text) ? "pass" : null;
 }
 
 // --- Edit hints (after plh gate/ledger.py, G-004) --------------------------------------------------------------------
@@ -263,6 +297,7 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
     speed = isSpeedRequest(event?.prompt); perfChecked = false;
     const parts = [];
     if (opts.rules) parts.push(CODING_RULES);
+    else if (opts.verify && opts.verifyRule) parts.push(VERIFY_RULE);
     if (opts.terse) parts.push(TERSE_STYLE);
     const chosen = chooseGuides(event?.prompt, guides, opts.maxGuides);
     if (chosen.length) { stats.guides += chosen.length; record("guides", ctx, { guides: chosen.map(g => g.name) }); parts.push(...chosen.map(g => g.text)); }
@@ -294,9 +329,10 @@ export function installCodingBoost(pi, opts = options(), { now = () => Date.now(
     if ((tool === "write" || tool === "edit") && !event.isError && typeof input.path === "string" && isCode(input.path)) {
       changed.set(resolve(cwdOf(ctx), input.path), ++seq);
     }
-    if (tool === "bash" && typeof input.command === "string" && isTestRun(input.command, text)) {
+    const outcome = tool === "bash" && typeof input.command === "string" ? testOutcome(input.command, text, event.isError, opts.testCommands) : null;
+    if (outcome) {
       seq++;
-      if (!event.isError) passedAt = seq;
+      if (outcome === "pass") passedAt = seq;
     }
 
     if (opts.editHints && tool === "edit" && event.isError && typeof input.path === "string") {

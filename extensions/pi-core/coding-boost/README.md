@@ -41,6 +41,8 @@ Environment variables:
 | `PI_CODING_GUIDES_DIR` | | A folder of more guides (`name.md` with a `triggers: word, two words` front matter, as in `guides/`) |
 | `PI_CODING_MAX_GUIDES` | `2` | Guides per request |
 | `PI_CODING_VERIFY` | on | `off` turns the verify loop off |
+| `PI_CODING_VERIFY_RULE` | off | `on` adds a one-paragraph "test before you finish" section when the coding rules are off (the `verify` part turns it on) |
+| `PI_CODING_TEST_COMMANDS` | | More commands that count as a test run, comma-separated (e.g. `./play --quick, just test`); `./check`, `./fight`, `./test`, `make check` and the usual runners already count |
 | `PI_CODING_MAX_WAKES` | `2` | Wake-ups per request (verify loop and self-review together) |
 | `PI_CODING_EDIT_HINTS` | on | `off` turns edit hints off |
 | `PI_CODING_EDIT_HINT_AFTER` | `2` | Failed edits of the same file before the closest text is shown |
@@ -70,3 +72,7 @@ plh techniques that depend on its workbench rather than on the model: Gate's ser
 per-request tool set (`harness/tool-choice.mjs`, which picks among plh's own tools), the browser tool, App Blocks,
 and the `[CANARY]` drift marker. Turn-level recovery (reasoning loops, template tokens, broken tool JSON, early
 compaction) is in [local-model-guard](../local-model-guard/README.md).
+
+## The `verify` part
+
+`../verify/index.ts` loads only the verify loop and the "test before you finish" rule, for any kind of task (asked for on 2026-11-25: "test yourself first" as a harness behavior, then measured per kind of task). Load it instead of coding-boost, never with it.

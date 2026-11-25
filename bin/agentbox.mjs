@@ -27,6 +27,7 @@ const PARTS = {
   "command-timeout": join(PKG, "extensions/command-timeout/index.ts"),
   "local-model-guard": join(PKG, "extensions/pi-core/local-model-guard/index.ts"),
   "coding-boost": join(PKG, "extensions/pi-core/coding-boost/index.ts"),
+  "verify": join(PKG, "extensions/pi-core/verify/index.ts"),
   "async-rewake": join(PKG, "extensions/pi-core/async-rewake/extension/index.ts"),
 };
 
